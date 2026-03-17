@@ -79,12 +79,17 @@ var (
 	defaultAPIHost = "http://localhost:11434"
 )
 
-// ProofOfWorkChallenge represents a proof-of-work challenge
 type ModelInfo struct {
 	Name         string `json:"name"`
 	Parameters   string `json:"parameters"`
 	Quantization string `json:"quantization"`
 	Size         int64  `json:"size"`
+	Details      struct {
+		Family            string `json:"family"`
+		ParameterSize     string `json:"parameter_size"`
+		QuantizationLevel string `json:"quantization_level"`
+	} `json:"details"`
+	ContextLength int `json:"context_length"`
 }
 
 func fetchModels() ([]ModelInfo, error) {
@@ -111,6 +116,28 @@ func fetchModels() ([]ModelInfo, error) {
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
 	}
+
+	// Fetch additional info for each model (like context length)
+	for i := range result.Models {
+		showResp, err := http.Post(mainURL+"/api/show", "application/json", bytes.NewBufferString(fmt.Sprintf(`{"name":"%s"}`, result.Models[i].Name)))
+		if err == nil {
+			defer showResp.Body.Close()
+			var showResult struct {
+				ModelInfo map[string]any `json:"model_info"`
+			}
+			if err := json.NewDecoder(showResp.Body).Decode(&showResult); err == nil {
+				// Look for context length in model_info
+				for k, v := range showResult.ModelInfo {
+					if strings.HasSuffix(k, ".context_length") {
+						if val, ok := v.(float64); ok {
+							result.Models[i].ContextLength = int(val)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return result.Models, nil
 }
 
@@ -556,7 +583,17 @@ func main() {
 	modelNames := make([]string, len(globalModels))
 	for i, model := range globalModels {
 		sizeGB := float64(model.Size) / (1024 * 1024 * 1024)
-		modelNames[i] = fmt.Sprintf("%s (%.2f GB)", model.Name, sizeGB)
+		contextLen := model.ContextLength
+		quantization := model.Details.QuantizationLevel
+		if quantization == "" {
+			quantization = model.Quantization
+		}
+
+		if contextLen == 0 {
+			modelNames[i] = fmt.Sprintf("%s (%.2f GB, %s)", model.Name, sizeGB, quantization)
+		} else {
+			modelNames[i] = fmt.Sprintf("%s (%.2f GB, %s, context:%dk)", model.Name, sizeGB, quantization, contextLen/1024)
+		}
 	}
 
 	// Create the select widget with model names
