@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/context-labs/ollamark/v2/internal/assets"
 	"github.com/dgrijalva/jwt-go"
 	tollbooth "github.com/didip/tollbooth/v6"
 	"github.com/didip/tollbooth/v6/limiter"
@@ -570,6 +571,42 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, gin.H{"benchmarks": benchmarks, "total": total})
+	})
+
+	// Serve static files from the embedded filesystem
+	r.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api") {
+			c.Next()
+			return
+		}
+
+		// Try to serve the file from the embedded FS
+		// React apps usually have an index.html as a fallback for client-side routing
+		filePath := "web/" + path
+		if path == "/" {
+			filePath = "web/index.html"
+		}
+
+		file, err := assets.WebResources.Open(filePath)
+		if err != nil {
+			// Fallback to index.html for React routing
+			filePath = "web/index.html"
+			file, err = assets.WebResources.Open(filePath)
+			if err != nil {
+				// Try public/index.html if we're using raw source structure
+				filePath = "web/public/index.html"
+				file, err = assets.WebResources.Open(filePath)
+				if err != nil {
+					c.String(http.StatusNotFound, "Not Found")
+					return
+				}
+			}
+		}
+		defer file.Close()
+
+		stat, _ := file.Stat()
+		http.ServeContent(c.Writer, c.Request, filePath, stat.ModTime(), file.(io.ReadSeeker))
 	})
 
 	r.POST("/api/submit-benchmark", authMiddleware(), func(c *gin.Context) {

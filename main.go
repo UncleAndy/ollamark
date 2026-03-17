@@ -39,6 +39,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	xwidget "fyne.io/x/fyne/widget"
+	"github.com/context-labs/ollamark/v2/internal/assets"
 	"github.com/dgrijalva/jwt-go"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -161,6 +162,9 @@ type ModelInfo struct {
 
 func fetchModels() ([]ModelInfo, error) {
 	mainURL := os.Getenv("OLLAMA_API")
+	if mainURL == "" {
+		mainURL = defaultAPIHost
+	}
 	resp, err := http.Get(mainURL + "/api/tags")
 	if err != nil {
 		return nil, err
@@ -590,9 +594,11 @@ func extractField(data, fieldName string) string {
 
 func main() {
 	// Load environment variables from .env file
-	err := godotenv.Load()
-	if err != nil {
-		fmt.Println("Error loading .env file:", err)
+	if _, err := os.Stat(".env"); err == nil {
+		err := godotenv.Load()
+		if err != nil {
+			fmt.Println("Error loading .env file:", err)
+		}
 	}
 
 	fmt.Println("Loading Ollamark...")
@@ -605,7 +611,7 @@ func main() {
 	}
 	fmt.Println("Ollama Version:", ollamaVersion)
 
-	err = initModels()
+	err := initModels()
 	if err != nil {
 		fmt.Println("Failed to initialize models:", err)
 		return
@@ -673,19 +679,15 @@ func main() {
 	w.CenterOnScreen()
 
 	// create a logo
-	logo := canvas.NewImageFromFile("logo.svg")
+	logoData, _ := assets.WebResources.ReadFile("logo.svg")
+	logo := canvas.NewImageFromResource(fyne.NewStaticResource("logo.svg", logoData))
 	logo.FillMode = canvas.ImageFillContain // Use 'Contain' to ensure the image fits well
 	logo.SetMinSize(fyne.NewSize(100, 100))
 
 	// Load the SVG icon
-	icon, err := fyne.LoadResourceFromPath("logo.svg")
-	if err != nil {
-		// Handle the error if the icon file cannot be loaded
-		fmt.Println("Failed to load icon:", err)
-	} else {
-		// Set the application icon
-		a.SetIcon(icon)
-	}
+	icon := fyne.NewStaticResource("logo.svg", logoData)
+	// Set the application icon
+	a.SetIcon(icon)
 
 	sysinfo, _ := getSysInfo()
 	gpuinfo, _ := getGPUInfo()
@@ -779,8 +781,17 @@ func main() {
 	progressBar := widget.NewProgressBarInfinite()
 	progressBar.Hide()
 
-	gifURI := storage.NewFileURI("loader.gif")
+	// Load loader.gif from assets
+	loaderData, _ := assets.WebResources.ReadFile("loader.gif")
+	// Since NewAnimatedGif only takes a URI, we need to provide one.
+	// We use a temporary file to serve the embedded content.
+	tmpGif, _ := os.CreateTemp("", "loader*.gif")
+	tmpGif.Write(loaderData)
+	tmpGif.Close()
+	gifURI := storage.NewFileURI(tmpGif.Name())
 	gif, err := xwidget.NewAnimatedGif(gifURI)
+	// Note: Ideally we'd remove it when the app closes
+	// defer os.Remove(tmpGif.Name())
 	if err != nil {
 		fmt.Println("Error loading gif:", err)
 	} else {

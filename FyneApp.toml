@@ -1,7 +1,7 @@
 Website = "https://ollamark.com"
 
 [Details]
-  Icon = "icon.png"
+  Icon = "internal/assets/icon.png"
   Name = "Ollamark"
   ID = "com.ollamark.app"
   Version = "1.0.0"
