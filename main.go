@@ -99,9 +99,10 @@ type GPUInfo struct {
 }
 
 var (
-	globalModels  []ModelInfo
-	apiEndpoint   string
-	clientVersion = "0.0.1"
+	globalModels   []ModelInfo
+	apiEndpoint    string
+	clientVersion  = "0.0.1"
+	defaultAPIHost = "http://localhost:11434"
 )
 
 // ProofOfWorkChallenge represents a proof-of-work challenge
@@ -159,8 +160,8 @@ type ModelInfo struct {
 }
 
 func fetchModels() ([]ModelInfo, error) {
-	mainURL := os.Getenv("OLLAMARK_API")
-	resp, err := http.Get(mainURL + "/api/model-list")
+	mainURL := os.Getenv("OLLAMA_API")
+	resp, err := http.Get(mainURL + "/api/tags")
 	if err != nil {
 		return nil, err
 	}
@@ -548,14 +549,29 @@ func getIPAddress() string {
 }
 
 func getOllamaVersion() string {
-	cmd := exec.Command("ollama", "--version")
-	output, err := cmd.Output()
+	mainURL := os.Getenv("OLLAMA_API")
+	if mainURL == "" {
+		mainURL = defaultAPIHost
+	}
+	resp, err := http.Get(mainURL + "/api/version")
+	if err != nil {
+		return "Unknown"
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "Unknown"
 	}
 
-	// remove "ollama version is " from the output
-	return strings.TrimSpace(strings.Split(string(output), "ollama version is ")[1])
+	var result struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "Unknown"
+	}
+
+	return result.Version
 }
 
 func extractField(data, fieldName string) string {
@@ -606,13 +622,17 @@ func main() {
 		fmt.Println("      ollamark -m llama3 -i 10")
 		fmt.Println("      ollamark -m phi3")
 		fmt.Println("      ollamark -m phi3 -s")
-		fmt.Println("      ollamark -m phi3 -s -o http://localhost:11434/api/generate")
+		fmt.Println("      ollamark -m phi3 -s -o " + defaultAPIHost + "/api/generate")
 	}
 
 	// Parse command-line arguments (Ollamark CLI)
+	defaultOllamaAPI := os.Getenv("OLLAMA_API")
+	if defaultOllamaAPI == "" {
+		defaultOllamaAPI = defaultAPIHost
+	}
 	modelPtr := flag.String("m", "llama3", "Model name to benchmark (default: llama3)")
 	submitPtr := flag.Bool("s", false, "Submit benchmark results to Ollamark.com (default false)")
-	ollamaPtr := flag.String("o", "http://localhost:11434", "Ollama API endpoint (default http://localhost:11434)")
+	ollamaPtr := flag.String("o", defaultOllamaAPI, "Ollama API endpoint (default "+defaultOllamaAPI+")")
 	iterationsPtr := flag.Int("i", 2, "Number of benchmark iterations (Min 2, Max 20)")
 	flag.Parse()
 
@@ -801,7 +821,7 @@ func main() {
 				Name: modelName,
 			}
 			jsonData, _ := json.Marshal(modelRequest)
-			fullURL := apiEndpoint + "/api/pull"
+			fullURL := apiURL + "/api/pull"
 			resultLabel.SetText("Pulling model " + modelName + ", Please wait...")
 			resultLabel.Refresh()
 			resp, err := http.Post(fullURL, "application/json", bytes.NewBuffer(jsonData))

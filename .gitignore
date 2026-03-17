@@ -3,6 +3,7 @@
 ollamark
 ollamark.exe
 ollamark.app
+ollamark_test
 
 .env
 private_key.pem
