@@ -67,7 +67,7 @@ func getCPUName() string {
 		)
 		output, err := cmd.Output()
 		if err != nil {
-			slog.Error("failed to parse CPU version: %v", err)
+			slog.Error("failed to parse CPU version", "error", err)
 			// return "Unknown"
 		}
 		lines := strings.Split(string(output), "\n")
