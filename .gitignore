@@ -4,6 +4,7 @@ ollamark
 ollamark.exe
 ollamark.app
 ollamark_test
+ollamark-server
 
 .env
 private_key.pem
