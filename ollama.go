@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 )
 
 type OllamaRequest struct {
@@ -39,6 +40,10 @@ type ModelInfo struct {
 	ContextLength int `json:"context_length"`
 }
 
+type ModelDetailsResponse struct {
+	ModelInfo map[string]any `json:"model_info"`
+}
+
 func fetchModels() ([]ModelInfo, error) {
 	mainURL := os.Getenv("OLLAMA_API")
 	if mainURL == "" {
@@ -60,6 +65,28 @@ func fetchModels() ([]ModelInfo, error) {
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, err
+	}
+
+	for i := range result.Models {
+		showResp, err := http.Post(mainURL+"/api/show", "application/json", strings.NewReader(`{"name":"`+result.Models[i].Name+`"}`))
+		if err != nil {
+			continue
+		}
+
+		showBody, err := io.ReadAll(showResp.Body)
+		if err != nil {
+			continue
+		}
+		_ = showResp.Body.Close()
+
+		var details ModelDetailsResponse
+		if err := json.Unmarshal(showBody, &details); err != nil {
+			continue
+		}
+
+		if contextLen, ok := details.ModelInfo["llama.context_length"].(float64); ok {
+			result.Models[i].ContextLength = int(contextLen)
+		}
 	}
 
 	return result.Models, nil

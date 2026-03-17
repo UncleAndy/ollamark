@@ -72,7 +72,7 @@ func runGUI() {
 		if contextLen == 0 {
 			modelNames[i] = fmt.Sprintf("%s (%.2f GB, %s)", model.Name, sizeGB, quantization)
 		} else {
-			modelNames[i] = fmt.Sprintf("%s (%.2f GB, %s, context:%dk)", model.Name, sizeGB, quantization, contextLen/1024)
+			modelNames[i] = fmt.Sprintf("%s (%.2f GB, %s, ctx:%dk)", model.Name, sizeGB, quantization, contextLen/1024)
 		}
 	}
 

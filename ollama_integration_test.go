@@ -44,11 +44,32 @@ func TestFetchModels_Integration(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/tags" {
-			t.Errorf("Expected to request '/api/tags', got: %s", r.URL.Path)
-		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockModels)
+		if r.URL.Path == "/api/tags" {
+			json.NewEncoder(w).Encode(mockModels)
+		} else if r.URL.Path == "/api/show" {
+			var body struct {
+				Name string `json:"name"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("Failed to decode /api/show body: %v", err)
+			}
+			modelName := body.Name
+			var contextLen int
+			if modelName == "llama3:latest" {
+				contextLen = 8192
+			} else if modelName == "mistral:latest" {
+				contextLen = 32768
+			}
+			resp := map[string]any{
+				"model_info": map[string]any{
+					"llama.context_length": float64(contextLen),
+				},
+			}
+			json.NewEncoder(w).Encode(resp)
+		} else {
+			t.Errorf("Unexpected request path: %s", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -83,6 +104,15 @@ func TestFetchModels_Integration(t *testing.T) {
 	// Verify quantization level
 	if models[0].Details.QuantizationLevel != "Q4_0" {
 		t.Errorf("Expected quantization_level 'Q4_0', got '%s'", models[0].Details.QuantizationLevel)
+	}
+
+	// Verify ContextLength
+	if models[0].ContextLength != 8192 {
+		t.Errorf("Expected context_length 8192 for llama3, got %d", models[0].ContextLength)
+	}
+
+	if models[1].ContextLength != 32768 {
+		t.Errorf("Expected context_length 32768 for mistral, got %d", models[1].ContextLength)
 	}
 }
 
