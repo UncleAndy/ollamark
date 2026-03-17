@@ -6,53 +6,24 @@
 package main
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"flag"
 	"fmt"
-	"image/color"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
-	"sort"
 	"strconv"
 	"strings"
-	"time"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/storage"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
-	xwidget "fyne.io/x/fyne/widget"
-	"github.com/context-labs/ollamark/v2/internal/assets"
 	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/mem"
 )
 
-type OllamaRequest struct {
-	ModelName string `json:"model"`
-	Prompt    string `json:"prompt"`
-}
-
-type ModelRequest struct {
-	Name string `json:"name"`
-}
-
-type OllamaResponse struct {
-	Model        string `json:"model"`
-	CreatedAt    string `json:"created_at"`
-	Response     string `json:"response"`
-	Done         bool   `json:"done"`
-	EvalCount    int    `json:"eval_count"`
-	EvalDuration int64  `json:"eval_duration"`
-}
+var (
+	globalModels   []ModelInfo
+	apiEndpoint    string
+	clientVersion  = "0.0.1"
+	defaultAPIHost = "http://localhost:11434"
+)
 
 type SysInfo struct {
 	OS      string `json:"os"`
@@ -70,87 +41,6 @@ type GPUInfo struct {
 	Memory        string `json:"memory"`
 	DriverVersion string `json:"driver_version"`
 	Count         int    `json:"count"`
-}
-
-var (
-	globalModels   []ModelInfo
-	apiEndpoint    string
-	clientVersion  = "0.0.1"
-	defaultAPIHost = "http://localhost:11434"
-)
-
-type ModelInfo struct {
-	Name         string `json:"name"`
-	Parameters   string `json:"parameters"`
-	Quantization string `json:"quantization"`
-	Size         int64  `json:"size"`
-	Details      struct {
-		Family            string `json:"family"`
-		ParameterSize     string `json:"parameter_size"`
-		QuantizationLevel string `json:"quantization_level"`
-	} `json:"details"`
-	ContextLength int `json:"context_length"`
-}
-
-func fetchModels() ([]ModelInfo, error) {
-	mainURL := os.Getenv("OLLAMA_API")
-	if mainURL == "" {
-		mainURL = defaultAPIHost
-	}
-	resp, err := http.Get(mainURL + "/api/tags")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// Read the raw JSON response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	// Unmarshal the JSON response
-	var result struct {
-		Models []ModelInfo `json:"models"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-
-	// Fetch additional info for each model (like context length)
-	for i := range result.Models {
-		showResp, err := http.Post(mainURL+"/api/show", "application/json", bytes.NewBufferString(fmt.Sprintf(`{"name":"%s"}`, result.Models[i].Name)))
-		if err == nil {
-			defer showResp.Body.Close()
-			var showResult struct {
-				ModelInfo map[string]any `json:"model_info"`
-			}
-			if err := json.NewDecoder(showResp.Body).Decode(&showResult); err == nil {
-				// Look for context length in model_info
-				for k, v := range showResult.ModelInfo {
-					if strings.HasSuffix(k, ".context_length") {
-						if val, ok := v.(float64); ok {
-							result.Models[i].ContextLength = int(val)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return result.Models, nil
-}
-
-func initModels() error {
-	models, err := fetchModels()
-	if err != nil {
-		return err
-	}
-	sort.Slice(models, func(i, j int) bool {
-		return models[i].Name < models[j].Name
-	})
-	globalModels = models
-	return nil
 }
 
 func getCPUName() string {
@@ -218,13 +108,8 @@ func getKernelVersion() (string, error) {
 
 func getSysInfo() (*SysInfo, error) {
 	v, _ := mem.VirtualMemory()
-	// s, _ := mem.SwapMemory()
 
 	totalMemory := v.Total / 1024 / 1024 / 1024
-	// usedMemory := v.Used
-	// availableMemory := v.Available
-	// swapTotal := s.Total
-	// swapUsed := s.Used
 
 	sysInfo := &SysInfo{}
 	sysInfo.OS = runtime.GOOS
@@ -236,13 +121,12 @@ func getSysInfo() (*SysInfo, error) {
 	}
 	sysInfo.Kernel = kernelVersion
 	sysInfo.CPU = strconv.Itoa(runtime.NumCPU())
-	// get CPU Name for Windows and Linux
 
 	sysInfo.CPUName = getCPUName()
 
 	sysInfo.Memory = strconv.Itoa(int(totalMemory)) + " GB"
 
-	// Get system information if macOS (darwin) and aarch64 (arm64) then get the info with apple silicon only command: TODO (Test)
+	// Get system information if macOS (darwin) and aarch64 (arm64) then get the info with apple silicon only command
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 		cmd := exec.Command("system_profiler", "SPHardwareDataType")
 		output, err := cmd.Output()
@@ -279,7 +163,6 @@ func getMacGPUInfo() (*GPUInfo, error) {
 		}
 	}
 
-	// If we couldn't find GPU info, it's likely integrated with the CPU
 	if gpuInfo.Name == "" {
 		cpuCmd := exec.Command("system_profiler", "SPHardwareDataType")
 		cpuOutput, err := cpuCmd.Output()
@@ -296,7 +179,6 @@ func getMacGPUInfo() (*GPUInfo, error) {
 		}
 	}
 
-	// Memory information isn't easily available for integrated GPUs
 	gpuInfo.Memory = "Shared"
 	gpuInfo.DriverVersion = "N/A"
 	gpuInfo.Count = 1
@@ -305,24 +187,20 @@ func getMacGPUInfo() (*GPUInfo, error) {
 }
 
 func getGPUInfo() (*GPUInfo, error) {
-	// First, attempt to use nvidia-smi to fetch Nvidia GPU info
 	nvidiaGPU, err := getNvidiaGPUInfo()
 	if err == nil {
 		return nvidiaGPU, nil
 	}
 
-	// If Nvidia GPU info fetching fails, attempt to fetch AMD GPU info
 	amdGPU, err := getAMDGPUInfo()
 	if err == nil {
 		return amdGPU, nil
 	}
 
-	// Check if we're on macOS (darwin) and arm64 architecture
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
 		return getMacGPUInfo()
 	}
 
-	// If both methods fail, return the last error
 	return nil, err
 }
 
@@ -377,24 +255,23 @@ func getAMDGPUInfoWindows() (*GPUInfo, error) {
 func parseWMICOutput(output string) (*GPUInfo, error) {
 	lines := strings.Split(output, "\n")
 	info := GPUInfo{}
-	gpuNames := make(map[string]bool) // To track unique GPU names
+	gpuNames := make(map[string]bool)
 
 	for _, line := range lines {
 		if strings.HasPrefix(line, "Name=") {
 			name := strings.TrimSpace(strings.Split(line, "=")[1])
-			// Skip integrated and virtual GPUs
 			if strings.Contains(name, "Integrated") || strings.Contains(name, "Display Adapter") || strings.Contains(name, "AMD Radeon(TM) Graphics") {
 				continue
 			}
 			if !gpuNames[name] {
 				gpuNames[name] = true
 				info.Name = name
-				info.Vendor = "AMD" // Assuming AMD if we are parsing this on an AMD system check
+				info.Vendor = "AMD"
 				info.Count++
 			}
 		} else if strings.HasPrefix(line, "DriverVersion=") {
 			info.DriverVersion = strings.TrimSpace(strings.Split(line, "=")[1])
-			info.Memory = "Unknown" // Placeholder for memory, as WMIC does not provide it directly
+			info.Memory = "Unknown"
 		}
 	}
 
@@ -413,15 +290,12 @@ func getAMDGPUInfoLinux() (*GPUInfo, error) {
 	}
 
 	outputStr := string(output)
-	// Example of parsing, adjust according to actual output
 	if strings.Contains(outputStr, "Radeon") || strings.Contains(outputStr, "AMD") {
 		name := extractField(outputStr, "product")
-		// vendor := "AMD"
 		memory := extractField(outputStr, "size")
 
 		return &GPUInfo{
-			Name: name,
-			// Vendor: vendor,
+			Name:   name,
 			Memory: memory,
 		}, nil
 	}
@@ -429,34 +303,7 @@ func getAMDGPUInfoLinux() (*GPUInfo, error) {
 	return nil, fmt.Errorf("no AMD GPU detected")
 }
 
-func getOllamaVersion() string {
-	mainURL := os.Getenv("OLLAMA_API")
-	if mainURL == "" {
-		mainURL = defaultAPIHost
-	}
-	resp, err := http.Get(mainURL + "/api/version")
-	if err != nil {
-		return "Unknown"
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "Unknown"
-	}
-
-	var result struct {
-		Version string `json:"version"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "Unknown"
-	}
-
-	return result.Version
-}
-
 func extractField(data, fieldName string) string {
-	// Simple parsing logic, needs to be adjusted based on actual output
 	start := strings.Index(data, fieldName+":")
 	if start == -1 {
 		return ""
@@ -494,572 +341,9 @@ func main() {
 		return
 	}
 
-	flag.Usage = func() {
-		fmt.Println("Usage: ollamark [options]")
-		fmt.Println("Options:")
-		flag.PrintDefaults()
-		fmt.Println("Examples:")
-		fmt.Println("  For Ollamark GUI mode:")
-		fmt.Println("      ollamark (no flags)")
-		fmt.Println("  For Ollamark CLI mode:")
-		fmt.Println("      ollamark -m llama3 -i 10")
-		fmt.Println("      ollamark -m phi3")
-		fmt.Println("      ollamark -m phi3 -o " + defaultAPIHost + "/api/generate")
-	}
-
-	// Parse command-line arguments (Ollamark CLI)
-	defaultOllamaAPI := os.Getenv("OLLAMA_API")
-	if defaultOllamaAPI == "" {
-		defaultOllamaAPI = defaultAPIHost
-	}
-	modelPtr := flag.String("m", "llama3", "Model name to benchmark (default: llama3)")
-	ollamaPtr := flag.String("o", defaultOllamaAPI, "Ollama API endpoint (default "+defaultOllamaAPI+")")
-	iterationsPtr := flag.Int("i", 2, "Number of benchmark iterations (Min 2, Max 20)")
-	flag.Parse()
-
-	// Set the global API endpoint
-	apiEndpoint = *ollamaPtr
-
-	// Check if CLI arguments are provided
-	if flag.NFlag() > 0 {
-
-		if *modelPtr == "" || *ollamaPtr == "" {
-			flag.Usage()
-			os.Exit(1)
-		}
-
-		if flag.NArg() > 0 {
-			flag.Usage()
-			os.Exit(1)
-		}
-
-		if (*iterationsPtr < 2) || (*iterationsPtr > 20) {
-			flag.Usage()
-			os.Exit(1)
-		}
-
-		// Run ollamark in CLI mode
-		runBenchmarkCLI(*modelPtr, apiEndpoint, *iterationsPtr)
+	if parseAndRunCLI() {
 		return
 	}
 
-	// Create a new Fyne app
-	a := app.NewWithID("Ollamark")
-	a.Settings().SetTheme(theme.DarkTheme())
-	fyne.CurrentApp().Settings().SetTheme(fyne.CurrentApp().Settings().Theme())
-	w := a.NewWindow("Ollamark - Ollama Benchmark")
-
-	// set window size
-	w.Resize(fyne.NewSize(400, 300))
-	w.CenterOnScreen()
-
-	// create a logo
-	logoData, _ := assets.WebResources.ReadFile("logo.svg")
-	logo := canvas.NewImageFromResource(fyne.NewStaticResource("logo.svg", logoData))
-	logo.FillMode = canvas.ImageFillContain // Use 'Contain' to ensure the image fits well
-	logo.SetMinSize(fyne.NewSize(100, 100))
-
-	// Load the SVG icon
-	icon := fyne.NewStaticResource("logo.svg", logoData)
-	// Set the application icon
-	a.SetIcon(icon)
-
-	sysinfo, _ := getSysInfo()
-	gpuinfo, _ := getGPUInfo()
-	ollamaVersion = getOllamaVersion()
-
-	// create an api entry field
-	apiEntry := widget.NewEntry()
-	apiEntry.SetText(apiEndpoint)
-
-	// create a title label
-	titleLabel := widget.NewLabel("Ollama API Endpoint")
-	titleLabel.TextStyle = fyne.TextStyle{Bold: true}
-
-	title2Label := widget.NewLabel("Select a model to benchmark")
-	title2Label.TextStyle = fyne.TextStyle{Bold: true}
-
-	// Create a slice of model names for the dropdown
-	modelNames := make([]string, len(globalModels))
-	for i, model := range globalModels {
-		sizeGB := float64(model.Size) / (1024 * 1024 * 1024)
-		contextLen := model.ContextLength
-		quantization := model.Details.QuantizationLevel
-		if quantization == "" {
-			quantization = model.Quantization
-		}
-
-		if contextLen == 0 {
-			modelNames[i] = fmt.Sprintf("%s (%.2f GB, %s)", model.Name, sizeGB, quantization)
-		} else {
-			modelNames[i] = fmt.Sprintf("%s (%.2f GB, %s, context:%dk)", model.Name, sizeGB, quantization, contextLen/1024)
-		}
-	}
-
-	// Create the select widget with model names
-	modelSelect := widget.NewSelect(modelNames, func(value string) {
-		// You can add logic here if needed when a model is selected
-	})
-
-	// Set the default selected model
-	// Find the index of "llama3" in the modelNames slice
-	defaultIndex := 0
-	for i, model := range globalModels {
-		if model.Name == "llama3" {
-			defaultIndex = i
-			break
-		}
-	}
-	modelSelect.SetSelected(modelNames[defaultIndex])
-
-	resultLabel := widget.NewLabel("")
-	resultLabel.Alignment = fyne.TextAlignCenter
-	resultLabel.Hide()
-
-	// Custom text field for tokens per second
-	tokensPerSecondText := canvas.NewText("", color.White)
-	tokensPerSecondText.TextStyle.Bold = true
-	tokensPerSecondText.TextSize = 38 // Larger text size
-	tokensPerSecondText.Alignment = fyne.TextAlignCenter
-	tokensPerSecondText.Hide()
-
-	tpsText := canvas.NewText("", color.White)
-	tpsText.TextStyle.Bold = true
-	tpsText.TextSize = 16 // Larger text size
-	tpsText.Alignment = fyne.TextAlignCenter
-	tpsText.Hide()
-
-	sysText := widget.NewLabel("")
-	sysText.Hide()
-
-	gpuText := widget.NewLabel("")
-	gpuText.Hide()
-
-	ollamaVersionText := widget.NewLabel("")
-	ollamaVersionText.Hide()
-
-	iterationsSlider := widget.NewSlider(2, 20)
-	iterationsSlider.SetValue(2)
-	iterationsSlider.Step = 1
-
-	iterationsLabel := widget.NewLabel("Iterations: 2")
-	iterationsSlider.OnChanged = func(value float64) {
-		iterationsLabel.SetText(fmt.Sprintf("Iterations: %d", int(value)))
-	}
-
-	sysText.SetText(fmt.Sprintf("CPU: %s\nMemory: %s\nOS: %s\nKernel: %s", sysinfo.CPUName, sysinfo.Memory, sysinfo.OS, sysinfo.Kernel))
-	sysText.Show()
-	sysText.Refresh()
-
-	// if gpu Info is available, show it
-	if gpuinfo != nil {
-		gpuText.SetText(fmt.Sprintf("GPU Name: %s\nGPU Memory: %s\nDriver Version: %s", gpuinfo.Name, gpuinfo.Memory, gpuinfo.DriverVersion))
-		gpuText.Show()
-		gpuText.Refresh()
-	}
-
-	// set ollama version text make version bold
-	ollamaVersionText.SetText(fmt.Sprintf("Ollama Version: %s", ollamaVersion))
-	ollamaVersionText.Show()
-	ollamaVersionText.Refresh()
-
-	// create a progress bar
-	progressBar := widget.NewProgressBarInfinite()
-	progressBar.Hide()
-
-	// Load loader.gif from assets
-	loaderData, _ := assets.WebResources.ReadFile("loader.gif")
-	// Since NewAnimatedGif only takes a URI, we need to provide one.
-	// We use a temporary file to serve the embedded content.
-	tmpGif, _ := os.CreateTemp("", "loader*.gif")
-	tmpGif.Write(loaderData)
-	tmpGif.Close()
-	gifURI := storage.NewFileURI(tmpGif.Name())
-	gif, err := xwidget.NewAnimatedGif(gifURI)
-	// Note: Ideally we'd remove it when the app closes
-	// defer os.Remove(tmpGif.Name())
-	if err != nil {
-		fmt.Println("Error loading gif:", err)
-	} else {
-		gif.Start()
-		gif.Show()
-	}
-
-	var benchmarkCancel context.CancelFunc
-	stopButton := widget.NewButton("Stop", nil)
-	stopButton.Disable()
-	stopButton.OnTapped = func() {
-		if benchmarkCancel != nil {
-			benchmarkCancel()
-		}
-		stopButton.Disable()
-	}
-
-	benchmarkButton := widget.NewButton("Benchmark", nil)
-	benchmarkButton.OnTapped = func() {
-		benchmarkButton.SetText("Benchmarking...")
-		benchmarkButton.Disable()
-		stopButton.Enable()
-
-		resultLabel.Show()
-		resultLabel.SetText("Benchmarks starting...")
-		resultLabel.Refresh()
-
-		tokensPerSecondText.Hide()
-		tpsText.Hide()
-		// sysText.Hide()
-		// gpuText.Hide()
-
-		var ctx context.Context
-		ctx, benchmarkCancel = context.WithCancel(context.Background())
-
-		go func() {
-			defer func() {
-				stopButton.Disable()
-				if benchmarkCancel != nil {
-					benchmarkCancel()
-				}
-			}()
-
-			progressBar.Show()
-			progressBar.Refresh()
-
-			// get api url and model name from entry fields
-			apiURL := apiEntry.Text
-			selectedModel := modelSelect.Selected
-			modelName := ""
-			// Extract model name from "Name (Size GB)" format
-			if idx := strings.LastIndex(selectedModel, " ("); idx != -1 {
-				modelName = selectedModel[:idx]
-			} else {
-				modelName = selectedModel
-			}
-			iterations := int(iterationsSlider.Value)
-
-			modelRequest := ModelRequest{
-				Name: modelName,
-			}
-			jsonData, _ := json.Marshal(modelRequest)
-			fullURL := apiURL + "/api/pull"
-			resultLabel.SetText("Pulling model " + modelName + ", Please wait...")
-			resultLabel.Refresh()
-
-			req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(jsonData))
-			if err != nil {
-				resultLabel.SetText("Error: " + err.Error())
-				benchmarkButton.SetText("Benchmark")
-				benchmarkButton.Enable()
-				progressBar.Hide()
-				progressBar.Refresh()
-				gif.Hide()
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-
-			client := &http.Client{}
-			resp, err := client.Do(req)
-			if err != nil {
-				if ctx.Err() == context.Canceled {
-					resultLabel.SetText("Benchmark stopped")
-				} else {
-					resultLabel.SetText("Error: " + err.Error())
-				}
-				benchmarkButton.SetText("Benchmark")
-				benchmarkButton.Enable()
-				progressBar.Hide()
-				progressBar.Refresh()
-				gif.Hide()
-				return
-			}
-			defer resp.Body.Close()
-
-			body, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode != http.StatusOK {
-				resultLabel.SetText(fmt.Sprintf("Error pulling model: %s", body))
-				benchmarkButton.SetText("Benchmark")
-				benchmarkButton.Enable()
-				progressBar.Hide()
-				progressBar.Refresh()
-				gif.Hide()
-				return
-			}
-
-			// fmt.Println("Model pull response:", string(body)) // Debug print
-			resultLabel.SetText("Model pulled successfully")
-			resultLabel.Refresh()
-			resultLabel.SetText("Benchmarking...")
-			resultLabel.Refresh()
-
-			var totalTokensPerSecond float64
-
-			for i := 0; i < iterations; i++ {
-				if ctx.Err() != nil {
-					resultLabel.SetText("Benchmark stopped")
-					break
-				}
-				requestBody := OllamaRequest{
-					ModelName: modelName,
-					Prompt:    "Tell me about Llamas in 500 words.",
-				}
-
-				jsonData, _ := json.Marshal(requestBody)
-				req, err := http.NewRequestWithContext(ctx, "POST", apiURL+"/api/generate", bytes.NewBuffer(jsonData))
-				if err != nil {
-					resultLabel.SetText("Error: " + err.Error())
-					benchmarkButton.SetText("Benchmark")
-					benchmarkButton.Enable()
-					progressBar.Hide()
-					progressBar.Refresh()
-					gif.Hide()
-					return
-				}
-				req.Header.Set("Content-Type", "application/json")
-
-				resp, err := client.Do(req)
-				if err != nil {
-					if ctx.Err() == context.Canceled {
-						resultLabel.SetText("Benchmark stopped")
-					} else {
-						resultLabel.SetText("Error: " + err.Error())
-					}
-					benchmarkButton.SetText("Benchmark")
-					benchmarkButton.Enable()
-					progressBar.Hide()
-					progressBar.Refresh()
-					gif.Hide()
-					return
-				}
-				defer resp.Body.Close()
-
-				// start := time.Now()
-
-				var response OllamaResponse
-				var responseText string
-				decoder := json.NewDecoder(resp.Body)
-
-				resultLabel.SetText(fmt.Sprintf("Benchmark #%d in progress...", i+1))
-				resultLabel.Refresh()
-
-				stopIteration := false
-				for {
-					if ctx.Err() != nil {
-						resultLabel.SetText("Benchmark stopped")
-						stopIteration = true
-						break
-					}
-					err := decoder.Decode(&response)
-					if err == io.EOF {
-						break
-					}
-					if err != nil {
-						if ctx.Err() == context.Canceled {
-							resultLabel.SetText("Benchmark stopped")
-						} else {
-							resultLabel.SetText("Error: " + err.Error())
-						}
-						progressBar.Hide()
-						progressBar.Refresh()
-						benchmarkButton.SetText("Benchmark")
-						benchmarkButton.Enable()
-						return
-					}
-
-					responseText += response.Response
-					progressBar.Refresh()
-				}
-				if stopIteration {
-					break
-				}
-
-				// duration := time.Since(start).Seconds()
-				tokensPerSecond := float64(response.EvalCount) / (float64(response.EvalDuration) / 1e9)
-
-				totalTokensPerSecond += tokensPerSecond
-			}
-
-			if ctx.Err() != nil {
-				progressBar.Hide()
-				gif.Hide()
-				progressBar.Refresh()
-				benchmarkButton.SetText("Benchmark")
-				benchmarkButton.Enable()
-				return
-			}
-
-			avgTokensPerSecond := totalTokensPerSecond / float64(iterations)
-
-			resultLabel.SetText(fmt.Sprintf("Benchmark completed for %s\nAverage Tokens per second: %.2f\nBenchmarked with %d iterations", modelName, avgTokensPerSecond, iterations))
-			resultLabel.Alignment = fyne.TextAlignCenter
-			resultLabel.Refresh()
-
-			// update custom text
-			tokensPerSecondText.Text = fmt.Sprintf("%.2f", avgTokensPerSecond) // Update the custom text
-			tokensPerSecondText.Show()
-			tpsText.Text = "Tokens per second"
-			tokensPerSecondText.Refresh()
-			tpsText.Refresh() // Refresh to update the display
-			tpsText.Show()
-
-			progressBar.Hide()
-			gif.Hide()
-			progressBar.Refresh() // Refresh after hiding the ProgressBar
-			benchmarkButton.SetText("Benchmark")
-			benchmarkButton.Enable()
-		}()
-	}
-
-	// border/group around systext and gputext
-	sysInfoGroup := container.NewVBox(ollamaVersionText, sysText, gpuText)
-	sysInfoGroupLabel := widget.NewLabel("System Information")
-	sysInfoGroupLabel.TextStyle = fyne.TextStyle{Bold: true}
-	sysInfoGroup = container.NewBorder(sysInfoGroupLabel, nil, nil, nil, sysInfoGroup)
-
-	content := container.NewVBox(
-		logo,
-		sysInfoGroup,
-		titleLabel,
-		apiEntry,
-		title2Label,
-		modelSelect,
-		iterationsLabel,
-		iterationsSlider,
-		gif,
-		// widget.NewSeparator(),
-		tokensPerSecondText,
-		tpsText,
-		resultLabel,
-		progressBar,
-		// widget.NewSeparator(),
-		benchmarkButton,
-		stopButton,
-	)
-
-	// Wrap the content with a padded container
-	paddedContent := container.NewPadded(container.NewPadded(content))
-
-	w.SetContent(paddedContent)
-	w.ShowAndRun()
-}
-
-func contains(models []ModelInfo, modelName string) bool {
-	for _, model := range models {
-		if model.Name == modelName {
-			return true
-		}
-	}
-	return false
-}
-
-func runBenchmarkCLI(modelName string, ollamaAPI string, iterations int) {
-	ollamaAPIURL := ollamaAPI
-
-	var totalTokensPerSecond float64
-
-	// modelName needs to match a model name in MODELS
-	if !contains(globalModels, modelName) {
-		fmt.Println("Model not supported. Please use a supported model from the list:", globalModels)
-		return
-	}
-
-	sysinfo, err := getSysInfo()
-	if err != nil {
-		// fmt.Println("Error:", err)
-		return
-	}
-	fmt.Printf("CPU: %+v\n", sysinfo.CPUName)
-	fmt.Printf("Memory: %+v\n", sysinfo.Memory)
-	fmt.Printf("OS: %+v\n", sysinfo.OS)
-	fmt.Printf("Kernel: %+v\n", sysinfo.Kernel)
-
-	gpuinfo, err := getGPUInfo()
-	if err != nil {
-		// fmt.Println("Error:", err)
-		return
-	}
-	fmt.Printf("GPU Name: %+v\n", gpuinfo.Name)
-	fmt.Printf("Driver Version: %+v\n", gpuinfo.DriverVersion)
-	fmt.Printf("GPU Memory: %+v\n", gpuinfo.Memory)
-
-	modelRequest := ModelRequest{
-		Name: modelName,
-	}
-	jsonData, _ := json.Marshal(modelRequest)
-	fullURL := ollamaAPI + "/api/pull"
-	fmt.Println("Pulling model " + modelName + ", Please wait...")
-	resp, err := http.Post(fullURL, "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		fmt.Println("Error pulling model:", string(body))
-		return
-	}
-
-	fmt.Println("Model pulled successfully")
-	fmt.Println("Benchmarking...")
-
-	for i := 0; i < iterations; i++ {
-		requestBody := OllamaRequest{
-			ModelName: modelName,
-			Prompt:    "Tell me about Llamas in 500 words.",
-		}
-
-		jsonData, _ := json.Marshal(requestBody)
-		resp, err := http.Post(ollamaAPIURL+"/api/generate", "application/json", bytes.NewBuffer(jsonData))
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
-		defer resp.Body.Close()
-
-		var response OllamaResponse
-		var responseText string
-		decoder := json.NewDecoder(resp.Body)
-
-		fmt.Printf("Benchmarking iteration %d in progress..", i+1)
-		progressTicker := time.NewTicker(500 * time.Millisecond)
-		defer progressTicker.Stop()
-
-		done := make(chan bool)
-		go func() {
-			for {
-				select {
-				case <-progressTicker.C:
-					fmt.Print(".")
-				case <-done:
-					fmt.Println()
-					return
-				}
-			}
-		}()
-
-		for {
-			err := decoder.Decode(&response)
-			if err == io.EOF {
-				done <- true
-				break
-			}
-			if err != nil {
-				fmt.Println("\nError:", err)
-				done <- true
-				return
-			}
-
-			responseText += response.Response
-		}
-
-		// duration := time.Since(start).Seconds()
-		tokensPerSecond := float64(response.EvalCount) / (float64(response.EvalDuration) / 1e9)
-
-		totalTokensPerSecond += tokensPerSecond
-	}
-
-	avgTokensPerSecond := totalTokensPerSecond / float64(iterations)
-
-	fmt.Printf("\nBenchmark completed for %s\n", modelName)
-	fmt.Printf("Average Tokens per second: %.2f\n", avgTokensPerSecond)
+	runGUI()
 }
