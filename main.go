@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -27,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -158,6 +160,7 @@ type ModelInfo struct {
 	Name         string `json:"name"`
 	Parameters   string `json:"parameters"`
 	Quantization string `json:"quantization"`
+	Size         int64  `json:"size"`
 }
 
 func fetchModels() ([]ModelInfo, error) {
@@ -192,6 +195,9 @@ func initModels() error {
 	if err != nil {
 		return err
 	}
+	sort.Slice(models, func(i, j int) bool {
+		return models[i].Name < models[j].Name
+	})
 	globalModels = models
 	return nil
 }
@@ -707,7 +713,8 @@ func main() {
 	// Create a slice of model names for the dropdown
 	modelNames := make([]string, len(globalModels))
 	for i, model := range globalModels {
-		modelNames[i] = model.Name
+		sizeGB := float64(model.Size) / (1024 * 1024 * 1024)
+		modelNames[i] = fmt.Sprintf("%s (%.2f GB)", model.Name, sizeGB)
 	}
 
 	// Create the select widget with model names
@@ -718,8 +725,8 @@ func main() {
 	// Set the default selected model
 	// Find the index of "llama3" in the modelNames slice
 	defaultIndex := 0
-	for i, name := range modelNames {
-		if name == "llama3" {
+	for i, model := range globalModels {
+		if model.Name == "llama3" {
 			defaultIndex = i
 			break
 		}
@@ -767,7 +774,7 @@ func main() {
 
 	// if gpu Info is available, show it
 	if gpuinfo != nil {
-		gpuText.SetText(fmt.Sprintf("GPU Name: %s\nDriver Version: %s", gpuinfo.Name, gpuinfo.DriverVersion))
+		gpuText.SetText(fmt.Sprintf("GPU Name: %s\nGPU Memory: %s\nDriver Version: %s", gpuinfo.Name, gpuinfo.Memory, gpuinfo.DriverVersion))
 		gpuText.Show()
 		gpuText.Refresh()
 	}
@@ -803,12 +810,23 @@ func main() {
 	var submitButton *widget.Button
 	var linkButton *widget.Button
 
+	var benchmarkCancel context.CancelFunc
+	stopButton := widget.NewButton("Stop", nil)
+	stopButton.Disable()
+	stopButton.OnTapped = func() {
+		if benchmarkCancel != nil {
+			benchmarkCancel()
+		}
+		stopButton.Disable()
+	}
+
 	benchmarkButton := widget.NewButton("Benchmark", nil)
 	benchmarkButton.OnTapped = func() {
 		linkButton.Hide()
 		benchmarkButton.SetText("Benchmarking...")
 		benchmarkButton.Disable()
 		submitButton.Disable()
+		stopButton.Enable()
 
 		resultLabel.Show()
 		resultLabel.SetText("Benchmarks starting...")
@@ -819,13 +837,30 @@ func main() {
 		// sysText.Hide()
 		// gpuText.Hide()
 
+		var ctx context.Context
+		ctx, benchmarkCancel = context.WithCancel(context.Background())
+
 		go func() {
+			defer func() {
+				stopButton.Disable()
+				if benchmarkCancel != nil {
+					benchmarkCancel()
+				}
+			}()
+
 			progressBar.Show()
 			progressBar.Refresh()
 
 			// get api url and model name from entry fields
 			apiURL := apiEntry.Text
-			modelName := modelSelect.Selected
+			selectedModel := modelSelect.Selected
+			modelName := ""
+			// Extract model name from "Name (Size GB)" format
+			if idx := strings.LastIndex(selectedModel, " ("); idx != -1 {
+				modelName = selectedModel[:idx]
+			} else {
+				modelName = selectedModel
+			}
 			iterations := int(iterationsSlider.Value)
 
 			modelRequest := ModelRequest{
@@ -835,9 +870,27 @@ func main() {
 			fullURL := apiURL + "/api/pull"
 			resultLabel.SetText("Pulling model " + modelName + ", Please wait...")
 			resultLabel.Refresh()
-			resp, err := http.Post(fullURL, "application/json", bytes.NewBuffer(jsonData))
+
+			req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewBuffer(jsonData))
 			if err != nil {
 				resultLabel.SetText("Error: " + err.Error())
+				benchmarkButton.SetText("Benchmark")
+				benchmarkButton.Enable()
+				progressBar.Hide()
+				progressBar.Refresh()
+				gif.Hide()
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				if ctx.Err() == context.Canceled {
+					resultLabel.SetText("Benchmark stopped")
+				} else {
+					resultLabel.SetText("Error: " + err.Error())
+				}
 				benchmarkButton.SetText("Benchmark")
 				benchmarkButton.Enable()
 				progressBar.Hide()
@@ -871,15 +924,35 @@ func main() {
 			start := time.Now()
 
 			for i := 0; i < iterations; i++ {
+				if ctx.Err() != nil {
+					resultLabel.SetText("Benchmark stopped")
+					break
+				}
 				requestBody := OllamaRequest{
 					ModelName: modelName,
 					Prompt:    "Tell me about Llamas in 500 words.",
 				}
 
 				jsonData, _ := json.Marshal(requestBody)
-				resp, err := http.Post(apiURL+"/api/generate", "application/json", bytes.NewBuffer(jsonData))
+				req, err := http.NewRequestWithContext(ctx, "POST", apiURL+"/api/generate", bytes.NewBuffer(jsonData))
 				if err != nil {
 					resultLabel.SetText("Error: " + err.Error())
+					benchmarkButton.SetText("Benchmark")
+					benchmarkButton.Enable()
+					progressBar.Hide()
+					progressBar.Refresh()
+					gif.Hide()
+					return
+				}
+				req.Header.Set("Content-Type", "application/json")
+
+				resp, err := client.Do(req)
+				if err != nil {
+					if ctx.Err() == context.Canceled {
+						resultLabel.SetText("Benchmark stopped")
+					} else {
+						resultLabel.SetText("Error: " + err.Error())
+					}
 					benchmarkButton.SetText("Benchmark")
 					benchmarkButton.Enable()
 					progressBar.Hide()
@@ -898,13 +971,23 @@ func main() {
 				resultLabel.SetText(fmt.Sprintf("Benchmark #%d in progress...", i+1))
 				resultLabel.Refresh()
 
+				stopIteration := false
 				for {
+					if ctx.Err() != nil {
+						resultLabel.SetText("Benchmark stopped")
+						stopIteration = true
+						break
+					}
 					err := decoder.Decode(&response)
 					if err == io.EOF {
 						break
 					}
 					if err != nil {
-						resultLabel.SetText("Error: " + err.Error())
+						if ctx.Err() == context.Canceled {
+							resultLabel.SetText("Benchmark stopped")
+						} else {
+							resultLabel.SetText("Error: " + err.Error())
+						}
 						progressBar.Hide()
 						progressBar.Refresh()
 						benchmarkButton.SetText("Benchmark")
@@ -915,6 +998,9 @@ func main() {
 					responseText += response.Response
 					progressBar.Refresh()
 				}
+				if stopIteration {
+					break
+				}
 
 				// duration := time.Since(start).Seconds()
 				tokensPerSecond := float64(response.EvalCount) / (float64(response.EvalDuration) / 1e9)
@@ -922,6 +1008,15 @@ func main() {
 				totalTokensPerSecond += tokensPerSecond
 				evalCount = response.EvalCount
 				evalDuration = float64(response.EvalDuration) / 1e9
+			}
+
+			if ctx.Err() != nil {
+				progressBar.Hide()
+				gif.Hide()
+				progressBar.Refresh()
+				benchmarkButton.SetText("Benchmark")
+				benchmarkButton.Enable()
+				return
 			}
 
 			EvalCount := evalCount
@@ -1112,6 +1207,7 @@ func main() {
 		progressBar,
 		// widget.NewSeparator(),
 		benchmarkButton,
+		stopButton,
 		submitButton,
 		linkButton,
 	)
