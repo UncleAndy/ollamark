@@ -1,6 +1,15 @@
 # Ollamark
 
-### By Carsen Klock (https://twitter.com/carsenklock) for Ollama (https://ollama.com/) Benchmarking!
+### Based on project olamark by Carsen Klock (https://twitter.com/carsenklock) for Ollama (https://ollama.com/) Benchmarking!
+
+## Changes from base
+
+- Remove button & code for benchmark saving;
+- Add "Stop" button for stop benchmark work;
+- Addition info about models in models list;
+- Not required `.env` file for work;
+- Default URL for ollama if "http://localhost:11434"
+- Use embedding mechanism Golang to run from any place of a system;
 
 ## Overview
 Ollamark and Ollamark CLI is a command-line/UI interface for benchmarking models using the Ollama API. It allows users to specify the model to benchmark, whether to submit and share the benchmark results, the API endpoint, and number of iterations.
@@ -37,14 +46,12 @@ Options:
         Model name to benchmark (default "llama3")
   -o string
         Ollama API endpoint (default "http://localhost:11434")
-  -s    Submit benchmark results to Ollamark (default false)
 Examples:
   For Ollamark GUI mode:
       ollamark (no flags)
   For Ollamark CLI mode:
       ollamark -m llama3 -i 10
       ollamark -m phi3
-      ollamark -m phi3 -s -o http://localhost:11434
 ```
 
 ### Example
@@ -58,7 +65,6 @@ This command will benchmark the model "llama3" for 5 iterations, submit the resu
 The CLI checks for command-line arguments and if provided, Ollamark runs in CLI mode. If no arguments are provided, it defaults to the Ollamark GUI application.
 
 ## Additional Information for Building/Forking
-- Ensure the `.env` file is correctly configured as it loads environment variables crucial for the application.
 - The application can also be run as a Fyne GUI application if no CLI flags are provided.
 
 ## Contributing
@@ -69,6 +75,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Author
 - Carsen Klock (https://twitter.com/carsenklock)
+- Andrey Velikoredchanin (https://www.linkedin.com/in/uncleandyv/)
 
 ## Acknowledgments
 - [Ollama](https://ollama.com/) for providing Ollama.
